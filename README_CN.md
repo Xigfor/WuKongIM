@@ -1,5 +1,10 @@
 ##  悟空IM（让信息传递更简单）
 
+> Xigfor 生产发布统一使用
+> [`.github/workflows/release-xigfor-wukongim.yml`](.github/workflows/release-xigfor-wukongim.yml)。
+> 生产服务器禁止从源码现场构建；分阶段接管、健康检查与回滚契约见
+> [`.github/SETUP.md`](.github/SETUP.md)。
+
 10(2015-2025)年积累，沉淀出来的高性能通用通讯服务，支持即时通讯，站内/系统消息，消息中台，物联网通讯，音视频信令，直播弹幕，客服系统，AI通讯，即时社区等场景。
 
 
@@ -350,4 +355,3 @@ License
 ---------------
 
 WuKongIM is licensed under the [Apache License 2.0](./LICENSE).
-

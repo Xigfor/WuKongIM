@@ -1,0 +1,158 @@
+name: Release Xigfor WuKongIM
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Deploy the image after a successful build"
+        required: true
+        default: false
+        type: boolean
+      allow_production:
+        description: "Explicitly allow the production target"
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: xigfor-wukongim-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_REPO: xigfor/wukongim
+  SHOULD_DEPLOY: ${{ github.event_name != 'pull_request' && vars.RELEASE_WUKONGIM_DEPLOY_ENABLED == 'true' && vars.RELEASE_WUKONGIM_ALLOW_PRODUCTION == 'true' && (github.event_name == 'push' || (inputs.deploy == true && inputs.allow_production == true)) && 'true' || 'false' }}
+  RELEASE_AWS_HOST: ${{ vars.RELEASE_AWS_HOST }}
+  RELEASE_AWS_USER: ${{ vars.RELEASE_AWS_USER }}
+  RELEASE_WUKONGIM_COMPOSE_FILE: ${{ vars.RELEASE_WUKONGIM_COMPOSE_FILE }}
+  RELEASE_WUKONGIM_SERVICE: ${{ vars.RELEASE_WUKONGIM_SERVICE }}
+  RELEASE_WUKONGIM_CONTAINER: ${{ vars.RELEASE_WUKONGIM_CONTAINER }}
+  RELEASE_WUKONGIM_HEALTH_URL: ${{ vars.RELEASE_WUKONGIM_HEALTH_URL }}
+  RELEASE_WUKONGIM_RELEASE_DIR: ${{ vars.RELEASE_WUKONGIM_RELEASE_DIR }}
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Prepare image metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA:0:12}"
+          echo "image_tag=sha-${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "commit_date=$(git show -s --format=%ct "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
+          echo "version=xigfor-${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image with persistent cache
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: ${{ env.SHOULD_DEPLOY == 'true' }}
+          tags: ${{ env.IMAGE_REPO }}:${{ steps.metadata.outputs.image_tag }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+            GIT_COMMIT_DATE=${{ steps.metadata.outputs.commit_date }}
+            GIT_VERSION=${{ steps.metadata.outputs.version }}
+            GIT_TREE_STATE=clean
+          cache-from: type=gha,scope=xigfor-wukongim-amd64
+          cache-to: type=gha,mode=max,scope=xigfor-wukongim-amd64
+          provenance: false
+
+      - name: Validate deployment configuration
+        if: env.SHOULD_DEPLOY == 'true'
+        shell: bash
+        env:
+          RELEASE_AWS_SSH_KEY: ${{ secrets.RELEASE_AWS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          : "${RELEASE_AWS_HOST:?Set RELEASE_AWS_HOST}"
+          : "${RELEASE_AWS_USER:?Set RELEASE_AWS_USER}"
+          : "${RELEASE_AWS_SSH_KEY:?Set RELEASE_AWS_SSH_KEY}"
+          : "${RELEASE_WUKONGIM_COMPOSE_FILE:?Set RELEASE_WUKONGIM_COMPOSE_FILE}"
+          : "${RELEASE_WUKONGIM_SERVICE:?Set RELEASE_WUKONGIM_SERVICE}"
+          : "${RELEASE_WUKONGIM_CONTAINER:?Set RELEASE_WUKONGIM_CONTAINER}"
+          : "${RELEASE_WUKONGIM_HEALTH_URL:?Set RELEASE_WUKONGIM_HEALTH_URL}"
+          : "${RELEASE_WUKONGIM_RELEASE_DIR:?Set RELEASE_WUKONGIM_RELEASE_DIR}"
+
+      - name: Prepare SSH
+        if: env.SHOULD_DEPLOY == 'true'
+        shell: bash
+        env:
+          RELEASE_AWS_SSH_KEY: ${{ secrets.RELEASE_AWS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/xigfor-wukongim-release.pem"
+          printf '%s\n' "$RELEASE_AWS_SSH_KEY" > "$key_path"
+          chmod 600 "$key_path"
+          echo "RELEASE_AWS_SSH_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      - name: Transfer image to production host
+        if: env.SHOULD_DEPLOY == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${IMAGE_REPO}:${{ steps.metadata.outputs.image_tag }}"
+          ssh_target="${RELEASE_AWS_USER}@${RELEASE_AWS_HOST}"
+          ssh_options=(
+            -i "$RELEASE_AWS_SSH_KEY_PATH"
+            -o BatchMode=yes
+            -o ConnectTimeout=15
+            -o StrictHostKeyChecking=accept-new
+          )
+          docker save "$image" | gzip -1 | ssh "${ssh_options[@]}" "$ssh_target" 'gunzip | docker load'
+
+      - name: Deploy, verify, and rollback on failure
+        if: env.SHOULD_DEPLOY == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${IMAGE_REPO}:${{ steps.metadata.outputs.image_tag }}"
+          ssh_target="${RELEASE_AWS_USER}@${RELEASE_AWS_HOST}"
+          ssh_options=(
+            -i "$RELEASE_AWS_SSH_KEY_PATH"
+            -o BatchMode=yes
+            -o ConnectTimeout=15
+            -o StrictHostKeyChecking=accept-new
+          )
+          remote_args="$(
+            printf '%q ' \
+              --image "$image" \
+              --allow-production \
+              --compose-file "$RELEASE_WUKONGIM_COMPOSE_FILE" \
+              --service "$RELEASE_WUKONGIM_SERVICE" \
+              --container "$RELEASE_WUKONGIM_CONTAINER" \
+              --health-url "$RELEASE_WUKONGIM_HEALTH_URL" \
+              --release-dir "$RELEASE_WUKONGIM_RELEASE_DIR"
+          )"
+          ssh "${ssh_options[@]}" "$ssh_target" "bash -s -- $remote_args" < scripts/release-wukongim.sh
+
+      - name: Publish release summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Xigfor WuKongIM"
+            echo
+            echo "- Image: \`${IMAGE_REPO}:${{ steps.metadata.outputs.image_tag }}\`"
+            echo "- Deploy enabled: \`${SHOULD_DEPLOY}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"

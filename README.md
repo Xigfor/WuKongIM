@@ -1,5 +1,11 @@
 ##  WuKongIM (Making Communication Simpler)
 
+> Xigfor production releases use
+> [`.github/workflows/release-xigfor-wukongim.yml`](.github/workflows/release-xigfor-wukongim.yml).
+> The production host must not build from source. See
+> [`.github/SETUP.md`](.github/SETUP.md) for the guarded rollout and rollback
+> contract.
+
 A high-performance universal communication service, refined over 10 years (2015-2025). Supports instant messaging, in-app/system notifications, messaging middleware, IoT communication, audio/video signaling, live streaming comments, customer service systems, AI communication, instant communities, and more.
 
 
