@@ -1,5 +1,10 @@
-web/dist
-web/node_modules
+.git
+.gitignore
+.github
 .vscode
 .VSCodeCounter
-.github
+docs
+test
+**/node_modules
+**/dist
+*.md
