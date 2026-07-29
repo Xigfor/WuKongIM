@@ -34,6 +34,24 @@ type message struct {
 	syncRecordLock sync.RWMutex
 }
 
+type syncMessagesReq struct {
+	LoginUID        string   `json:"login_uid"`
+	UID             string   `json:"uid"`
+	ChannelID       string   `json:"channel_id"`
+	ChannelType     uint8    `json:"channel_type"`
+	StartMessageSeq uint64   `json:"start_message_seq"`
+	EndMessageSeq   uint64   `json:"end_message_seq"`
+	Limit           int      `json:"limit"`
+	PullMode        PullMode `json:"pull_mode"`
+	StreamV2        uint8    `json:"stream_v2"`
+}
+
+func (r *syncMessagesReq) normalizeLoginUID() {
+	if strings.TrimSpace(r.LoginUID) == "" {
+		r.LoginUID = r.UID
+	}
+}
+
 func newMessage(s *Server) *message {
 	return &message{
 		s:             s,
@@ -57,6 +75,7 @@ func (m *message) route(r *wkhttp.WKHttp) {
 
 	// 频道消息相关端点（从 channel.go 移动过来）
 	r.POST("/channel/messagesync", m.syncMessages)               // 同步频道消息
+	r.POST("/message/channel/sync", m.syncMessages)              // 兼容旧客户端的频道消息同步路径
 	r.GET("/channel/max_message_seq", m.getChannelMaxMessageSeq) // 获取某个频道最大的消息序号
 	r.GET("/channel/last_message", m.getChannelLastMessage)      // 获取频道最后一条消息
 
@@ -836,22 +855,14 @@ func (m *message) getMessageByClientMsgNo(c *wkhttp.Context) {
 // 同步频道内的消息
 func (m *message) syncMessages(c *wkhttp.Context) {
 
-	var req struct {
-		LoginUID        string   `json:"login_uid"` // 当前登录用户的uid
-		ChannelID       string   `json:"channel_id"`
-		ChannelType     uint8    `json:"channel_type"`
-		StartMessageSeq uint64   `json:"start_message_seq"` //开始消息列号（结果包含start_message_seq的消息）
-		EndMessageSeq   uint64   `json:"end_message_seq"`   // 结束消息列号（结果不包含end_message_seq的消息）
-		Limit           int      `json:"limit"`             // 每次同步数量限制
-		PullMode        PullMode `json:"pull_mode"`         // 拉取模式 0:向下拉取 1:向上拉取
-		StreamV2        uint8    `json:"stream_v2"`         // 是否使用stream_v2
-	}
+	var req syncMessagesReq
 	bodyBytes, err := BindJSON(&req, c)
 	if err != nil {
 		m.Error("数据格式有误！", zap.Error(err))
 		c.ResponseError(err)
 		return
 	}
+	req.normalizeLoginUID()
 
 	if strings.TrimSpace(req.ChannelID) == "" {
 		m.Error("channel_id不能为空！", zap.Any("req", req))
