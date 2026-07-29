@@ -13,6 +13,15 @@ The production host must never clone the repository or build the image. GitHub
 Actions builds the image with persistent BuildKit caches, streams the compressed
 image to the host, then runs the guarded deploy executor.
 
+Observed build-only timings on 2026-07-29:
+
+- first PR cache population: 2m17s;
+- first `main` cache population: 2m24s;
+- warm `main` rerun for the same source: 24s.
+
+A normal source-changing release will recompile the Go binary, so use 1-3
+minutes as the current build target rather than the 24-second no-change floor.
+
 ## Rollout Phases
 
 The initial repository configuration must remain:
