@@ -7,6 +7,7 @@ import (
 	"hash"
 	"hash/fnv"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/WuKongIM/WuKongIM/pkg/trace"
@@ -23,6 +24,8 @@ import (
 var _ DB = (*wukongDB)(nil)
 
 type wukongDB struct {
+	receiptMu sync.Mutex
+
 	dbs      []*pebble.DB
 	wkdbs    []*BatchDB
 	shardNum uint32 // 分区数量，这个一但设置就不能修改

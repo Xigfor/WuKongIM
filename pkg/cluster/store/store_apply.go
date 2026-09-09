@@ -148,6 +148,8 @@ func (s *Store) applyCMD(cmd *CMD, logIndex uint64) error {
 		return s.handleAddStreamMeta(cmd)
 	case CMDAddStreams: // 添加流
 		return s.handleAddStreams(cmd)
+	case CMDRecordMessageReceipts:
+		return s.applyMessageReceipts(cmd)
 	case CMDAddOrUpdateTester: // 添加或更新测试机
 		return s.handleAddOrUpdateTester(cmd)
 	case CMDRemoveTester: // 移除测试机

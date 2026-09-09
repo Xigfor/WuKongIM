@@ -62,6 +62,7 @@ func newMessage(s *Server) *message {
 
 // Route route
 func (m *message) route(r *wkhttp.WKHttp) {
+	newMessageReceiptAPI().route(r)
 	r.POST("/message/send", m.send)           // 发送消息
 	r.POST("/message/sendbatch", m.sendBatch) // 批量发送消息
 

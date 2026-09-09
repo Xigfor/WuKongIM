@@ -108,6 +108,7 @@ const (
 	CMDSaveStreamV2
 	// 更新最近会话的已读位置（如果seq更大）
 	CMDUpdateConversationIfSeqGreater
+	CMDRecordMessageReceipts
 )
 
 func (c CMDType) Uint16() uint16 {
@@ -116,6 +117,8 @@ func (c CMDType) Uint16() uint16 {
 
 func (c CMDType) String() string {
 	switch c {
+	case CMDRecordMessageReceipts:
+		return "CMDRecordMessageReceipts"
 	case CMDAddDevice:
 		return "CMDAddDevice"
 	case CMDUpdateDevice:

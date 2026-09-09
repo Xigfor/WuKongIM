@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "root": "..",
+  "checks": [
+    {"id":"receipt-http", "files":["internal/api/message_receipt.go"], "required_literals":["/message/receipt", "/message/extra/sync", "Authorization", "SettingReceiptEnabled", "messageReaded", "SyncOnce: 1"]},
+    {"id":"durable-receipts", "files":["pkg/wkdb/message_receipt.go"], "required_literals":["pebble.Sync", "receipt.ExtraVersion", "message_id_str"]},
+    {"id":"replication", "files":["pkg/cluster/store/message_receipt.go"], "required_literals":["ProposeUntilApplied", "CMDRecordMessageReceipts"]},
+    {"id":"release-gate", "files":[".github/workflows/release-xigfor-wukongim.yml"], "required_literals":["Read receipt contract gate", "TestMessageReceipt"]}
+  ]
+}

@@ -6,6 +6,7 @@ type DB interface {
 	// 获取下一个主键
 	NextPrimaryKey() uint64
 	// 消息
+	MessageReceiptDB
 	MessageDB
 	// 用户
 	UserDB

@@ -46,6 +46,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Set up Go for receipt contract tests
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Read receipt contract gate
+        run: go test ./internal/api ./pkg/wkdb ./pkg/cluster/store -run "TestMessageReceipt|TestChannelMessageSyncRoutes|TestSyncMessagesRequest" -count=1
+
       - name: Prepare image metadata
         id: metadata
         shell: bash
