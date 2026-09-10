@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"github.com/WuKongIM/WuKongIM/internal/options"
-	"github.com/WuKongIM/WuKongIM/internal/service"
-	"github.com/WuKongIM/WuKongIM/pkg/cluster/store"
 	"github.com/WuKongIM/WuKongIM/pkg/wkdb"
 	"github.com/WuKongIM/WuKongIM/pkg/wkhttp"
 	wkproto "github.com/WuKongIM/WuKongIMGoProto"
@@ -113,23 +111,4 @@ func TestMessageReceiptSyncArrayAndFailures(t *testing.T) {
 	require.Equal(t, 1, page[0].Readed)
 	a.sync = func(string, uint64, int) ([]wkdb.MessageReceipt, error) { return nil, errors.New("db down") }
 	require.Equal(t, 503, call().Code)
-}
-
-func TestMessageReceiptRegisteredTokenOwnership(t *testing.T) {
-	db := wkdb.NewWukongDB(wkdb.NewOptions(wkdb.WithDir(t.TempDir()), wkdb.WithShardNum(1)))
-	require.NoError(t, db.Open())
-	defer db.Close()
-	previous := service.Store
-	service.Store = store.New(store.NewOptions(store.WithDB(db)))
-	defer func() { service.Store = previous }()
-	require.NoError(t, db.AddDevice(wkdb.Device{Id: 1, Uid: "42", Token: "reader-token", DeviceFlag: 0}))
-	require.NoError(t, db.AddDevice(wkdb.Device{Id: 2, Uid: "99", Token: "sender-token", DeviceFlag: 0}))
-	for _, tc := range []struct {
-		uid, token string
-		want       bool
-	}{{"42", "reader-token", true}, {"42", "sender-token", false}, {"99", "reader-token", false}, {"42", "", false}, {"missing", "reader-token", false}} {
-		valid, err := localReceiptAuth(tc.uid, tc.token)
-		require.NoError(t, err)
-		require.Equal(t, tc.want, valid)
-	}
 }

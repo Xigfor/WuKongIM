@@ -1,8 +1,6 @@
 package api
 
 import (
-	"bytes"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,8 +56,6 @@ func newMessageReceiptAPI() *messageReceiptAPI {
 func (a *messageReceiptAPI) route(r *wkhttp.WKHttp) {
 	r.POST("/message/receipt", a.receipt)
 	r.POST("/message/extra/sync", a.syncExtra)
-	// Verifies the registered IM device token on the user's slot leader.
-	r.POST("/message/receipt/auth", receiptAuth)
 }
 
 func receiptError(c *wkhttp.Context, status int, message string) {
@@ -75,8 +71,8 @@ func (a *messageReceiptAPI) bind(c *wkhttp.Context, req *receiptRequest, message
 		receiptError(c, http.StatusBadRequest, "valid uid and peer channel_id with channel_type=1 required")
 		return "", false
 	}
-	token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
-	if token == "" {
+	scheme, token, present := strings.Cut(c.GetHeader("Authorization"), " ")
+	if !present || !strings.EqualFold(scheme, "Bearer") || token == "" || strings.ContainsAny(token, " \t\r\n") {
 		receiptError(c, http.StatusUnauthorized, "login required")
 		return "", false
 	}
@@ -190,88 +186,60 @@ func forwardReceipt(c *wkhttp.Context, body []byte, channel string, messageLeade
 	return true, nil
 }
 
-var receiptHTTPClient = &http.Client{Timeout: 5 * time.Second}
+// Mall login is the authority for App HTTP requests. IM device tokens may be
+// push tokens, and can change independently of the authenticated mall session.
+const receiptMemberInfoURL = "https://mall-portal.xigfor.com/sso/info"
 
-func authorizeReceipt(uid, token string) (bool, error) {
-	leader, err := service.Cluster.SlotLeaderOfChannel(uid, wkproto.ChannelTypePerson)
-	if err != nil {
-		return false, err
-	}
-	if options.G.IsLocalNode(leader.Id) {
-		return localReceiptAuth(uid, token)
-	}
-	body, _ := json.Marshal(map[string]string{"uid": uid})
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(leader.ApiServerAddr, "/")+"/message/receipt/auth", bytes.NewReader(body))
-	if err != nil {
-		return false, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	if options.G.ManagerToken != "" {
-		req.Header.Set("token", options.G.ManagerToken)
-	}
-	resp, err := receiptHTTPClient.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	if resp.StatusCode == http.StatusUnauthorized {
-		return false, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("receipt authentication status %d", resp.StatusCode)
-	}
-	return true, nil
+var receiptHTTPClient = &http.Client{
+	Timeout: 5 * time.Second,
+	// Never forward a user's credential to a redirect target.
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
-func localReceiptAuth(uid, token string) (bool, error) {
+func authorizeReceipt(uid, token string) (bool, error) {
+	return authorizeMallReceipt(receiptHTTPClient, uid, token)
+}
+
+func authorizeMallReceipt(client *http.Client, uid, token string) (bool, error) {
 	if uid == "" || token == "" {
 		return false, nil
 	}
-	devices, err := service.Store.DB().GetDevices(uid)
-	if errors.Is(err, wkdb.ErrNotFound) {
-		return false, nil
-	}
+	req, err := http.NewRequest(http.MethodGet, receiptMemberInfoURL, nil)
 	if err != nil {
 		return false, err
 	}
-	for _, device := range devices {
-		if device.Token != "" && subtle.ConstantTimeCompare([]byte(device.Token), []byte(token)) == 1 {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func receiptAuth(c *wkhttp.Context) {
-	var req struct {
-		UID string `json:"uid"`
-	}
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4096)
-	body, err := BindJSON(&req, c)
-	if err != nil || req.UID == "" {
-		receiptError(c, 400, "uid required")
-		return
-	}
-	forwarded, err := forwardReceipt(c, body, req.UID, false)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
 	if err != nil {
-		receiptError(c, 503, "authentication unavailable")
-		return
+		return false, fmt.Errorf("mall authentication unavailable")
 	}
-	if forwarded {
-		return
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return false, nil
 	}
-	valid, err := localReceiptAuth(req.UID, strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
-	if err != nil {
-		receiptError(c, 503, "authentication unavailable")
-		return
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("mall authentication status %d", resp.StatusCode)
 	}
-	if !valid {
-		receiptError(c, 401, "invalid user token")
-		return
+	var result struct {
+		Code int `json:"code"`
+		Data struct {
+			ID json.Number `json:"id"`
+		} `json:"data"`
 	}
-	c.ResponseOK()
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&result); err != nil {
+		return false, fmt.Errorf("invalid mall authentication response")
+	}
+	if result.Code == 401 || result.Code == 403 {
+		return false, nil
+	}
+	if result.Code != 200 {
+		return false, fmt.Errorf("mall authentication code %d", result.Code)
+	}
+	memberID, err := result.Data.ID.Int64()
+	if err != nil || memberID <= 0 {
+		return false, fmt.Errorf("missing mall member identity")
+	}
+	return strconv.FormatInt(memberID, 10) == uid, nil
 }
 
 func notifyMessageReaded(reader, peer string) error {
